@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pree Billing & Stock</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{
+    --navy:#0b2545; --navy-light:#13376b; --gold:#c9a227; --bg:#f4f6fa;
+    --card:#ffffff; --text:#1a2233; --muted:#66738a; --danger:#c0392b; --ok:#1e824c;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);}
+  header{background:var(--navy);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;}
+  header h1{font-size:17px;margin:0;letter-spacing:.3px;}
+  header h1 span{color:var(--gold);}
+  #userbar{font-size:12px;opacity:.85;display:flex;gap:10px;align-items:center;}
+  #userbar button{background:transparent;border:1px solid rgba(255,255,255,.4);color:#fff;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;}
+  nav{display:flex;gap:4px;overflow-x:auto;background:var(--navy-light);padding:0 10px;}
+  nav button{background:none;border:none;color:#d9e2f1;padding:10px 12px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
+  nav button.active{color:#fff;border-bottom-color:var(--gold);font-weight:600;}
+  main{padding:16px;max-width:900px;margin:0 auto;}
+  .card{background:var(--card);border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);}
+  .card h2{margin-top:0;font-size:15px;color:var(--navy);}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid #d5dae3;border-radius:6px;font-size:14px;}
+  button.primary{background:var(--navy);color:#fff;border:none;padding:10px 16px;border-radius:7px;font-size:14px;cursor:pointer;margin-top:12px;}
+  button.primary:hover{background:var(--navy-light);}
+  button.gold{background:var(--gold);color:var(--navy);border:none;padding:8px 12px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid #eef0f4;}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;}
+  .low{color:var(--danger);font-weight:700;}
+  .row{display:flex;gap:8px;align-items:end;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:130px;}
+  .lineitem{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:end;}
+  .remove{background:#fbeaea;color:var(--danger);border:none;border-radius:6px;padding:8px;cursor:pointer;}
+  #toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;}
+  #login{display:flex;align-items:center;justify-content:center;height:100vh;}
+  .hidden{display:none !important;}
+  .total{font-size:16px;font-weight:700;color:var(--navy);text-align:right;margin-top:8px;}
+</style>
+</head>
+<body>
+
+<!-- ===== LOGIN ===== -->
+<div id="login">
+  <div class="card" style="width:320px;">
+    <h2>🔐 Staff Login</h2>
+    <label>Email</label>
+    <input id="login-email" type="email" placeholder="you@preeimport.com">
+    <label>Password</label>
+    <input id="login-pass" type="password">
+    <button class="primary" style="width:100%" onclick="login()">Sign In</button>
+    <p id="login-error" style="color:var(--danger);font-size:12px;"></p>
+    <p style="font-size:11px;color:var(--muted);margin-top:14px;">Staff accounts are created in Supabase → Authentication. Ask admin to add you.</p>
+  </div>
+</div>
+
+<!-- ===== APP ===== -->
+<div id="app" class="hidden">
+  <header>
+    <h1>Pree <span>Billing & Stock</span></h1>
+    <div id="userbar"></div>
+  </header>
+  <nav id="tabs"></nav>
+  <main id="content"></main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ======================= CONFIG ======================= */
+// 1. Create a free project at https://supabase.com
+// 2. Run schema.sql in its SQL Editor
+// 3. Paste your Project URL and anon public key below
+const SUPABASE_URL = "https://ldpkbfwawwkeihgmrvip.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_A6xuGPiIAvau-DICGILzRg_9Oi3i9wE";
+/* ======================================================= */
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let currentUser = null;
+let activeTab = "stock";
+
+// ---------- AUTH ----------
+async function login(){
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { document.getElementById('login-error').textContent = error.message; return; }
+  currentUser = data.user;
+  showApp();
+}
+async function logout(){
+  await sb.auth.signOut();
+  currentUser = null;
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('login').classList.remove('hidden');
+}
+async function checkSession(){
+  const { data } = await sb.auth.getSession();
+  if (data.session) { currentUser = data.session.user; showApp(); }
+}
+function showApp(){
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('userbar').innerHTML =
+    `<span>${currentUser.email}</span><button onclick="logout()">Sign out</button>`;
+  buildNav();
+  renderTab('stock');
+  subscribeRealtime();
+}
+
+// ---------- NAV ----------
+const TABS = [
+  ['stock','📦 Stock'],
+  ['sale','🧾 New Sale'],
+  ['purchase','⬇️ New Purchase'],
+  ['reports','📊 Sales Report'],
+  ['parties','👥 Parties'],
+  ['items','🏷️ Items'],
+  ['warehouses','🏬 Warehouses'],
+  ['history','📜 History'],
+];
+function buildNav(){
+  const nav = document.getElementById('tabs');
+  nav.innerHTML = TABS.map(([id,label]) =>
+    `<button data-tab="${id}" onclick="renderTab('${id}')">${label}</button>`).join('');
+}
+function setActiveNav(id){
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.tab===id));
+}
+
+// ---------- HELPERS ----------
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.opacity = 1;
+  setTimeout(()=> t.style.opacity = 0, 2000);
+}
+async function fetchAll(table, order='name'){
+  const { data, error } = await sb.from(table).select('*').order(order, {ascending:true});
+  if (error) { toast('Error: '+error.message); return []; }
+  return data;
+}
+function downloadCSV(filename, headers, rows){
+  const esc = v => `"${String(v ?? '').replace(/"/g,'""')}"`;
+  const csv = [headers.map(esc).join(',')].concat(rows.map(r => r.map(esc).join(','))).join('\r\n');
+  const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ---------- ROUTER ----------
+async function renderTab(id){
+  activeTab = id;
+  setActiveNav(id);
+  const c = document.getElementById('content');
+  c.innerHTML = '<p style="color:var(--muted)">Loading…</p>';
+  if (id === 'stock') c.innerHTML = await viewStock();
+  else if (id === 'reports') c.innerHTML = await viewReports();
+  else if (id === 'parties') c.innerHTML = await viewParties();
+  else if (id === 'items') c.innerHTML = await viewItems();
+  else if (id === 'warehouses') c.innerHTML = await viewWarehouses();
+  else if (id === 'sale') { c.innerHTML = await viewSaleForm(); renderLines('sale'); }
+  else if (id === 'purchase') { c.innerHTML = await viewPurchaseForm(); renderLines('purchase'); }
+  else if (id === 'history') c.innerHTML = await viewHistory();
+}
+
+/* ================= STOCK (dashboard, with warehouse + time filters) ================= */
+let stockRange = 'week';
+let stockStart = (()=>{ const s=new Date(); s.setDate(s.getDate()-6); return ymd(s); })();
+let stockEnd = ymd(new Date());
+let stockWarehouseFilter = '';
+let stockItemFilter = '';
+
+function stockQuickRange(r){
+  const today = new Date();
+  if (r === 'today') { stockStart = ymd(today); stockEnd = ymd(today); }
+  else if (r === 'week') { const s = new Date(today); s.setDate(s.getDate()-6); stockStart = ymd(s); stockEnd = ymd(today); }
+  else if (r === 'month') { const s = new Date(today); s.setDate(s.getDate()-29); stockStart = ymd(s); stockEnd = ymd(today); }
+  else if (r === 'all') { stockStart = '2000-01-01'; stockEnd = ymd(today); }
+  stockRange = r;
+  renderTab('stock');
+}
+function applyStockRange(){
+  stockStart = document.getElementById('stock-start').value || stockStart;
+  stockEnd = document.getElementById('stock-end').value || stockEnd;
+  stockRange = 'custom';
+  renderTab('stock');
+}
+function setStockWarehouse(v){ stockWarehouseFilter = v; renderTab('stock'); }
+function setStockItem(v){ stockItemFilter = v; renderTab('stock'); }
+
+async function viewStock(){
+  const warehouses = await fetchAll('warehouses');
+  const allItems = await fetchAll('items');
+
+  let balQuery = sb.from('item_stock').select('quantity, item_id, warehouse_id, items(name,unit), warehouses(name)');
+  if (stockWarehouseFilter) balQuery = balQuery.eq('warehouse_id', stockWarehouseFilter);
+  if (stockItemFilter) balQuery = balQuery.eq('item_id', stockItemFilter);
+  const { data: balances, error } = await balQuery;
+  if (error) return `<div class="card"><p style="color:var(--danger)">${error.message}</p></div>`;
+
+  let purQuery = sb.from('purchase_items').select('quantity, item_id, purchases!inner(bill_date, warehouse_id)')
+    .gte('purchases.bill_date', stockStart).lte('purchases.bill_date', stockEnd);
+  if (stockWarehouseFilter) purQuery = purQuery.eq('purchases.warehouse_id', stockWarehouseFilter);
+  if (stockItemFilter) purQuery = purQuery.eq('item_id', stockItemFilter);
+  const { data: purchases } = await purQuery;
+
+  let saleQuery = sb.from('sale_items').select('quantity, item_id, sales!inner(bill_date, warehouse_id)')
+    .gte('sales.bill_date', stockStart).lte('sales.bill_date', stockEnd);
+  if (stockWarehouseFilter) saleQuery = saleQuery.eq('sales.warehouse_id', stockWarehouseFilter);
+  if (stockItemFilter) saleQuery = saleQuery.eq('item_id', stockItemFilter);
+  const { data: sales } = await saleQuery;
+
+  const inMap = {}, outMap = {};
+  (purchases||[]).forEach(p => { const k = p.item_id+'|'+p.purchases.warehouse_id; inMap[k] = (inMap[k]||0) + Number(p.quantity); });
+  (sales||[]).forEach(s => { const k = s.item_id+'|'+s.sales.warehouse_id; outMap[k] = (outMap[k]||0) + Number(s.quantity); });
+
+  const qbtn = (r,label) => `<button class="gold" style="opacity:${stockRange===r?1:.55}" onclick="stockQuickRange('${r}')">${label}</button>`;
+  const whOptions = warehouses.map(w => `<option value="${w.id}" ${w.id===stockWarehouseFilter?'selected':''}>${w.name}</option>`).join('');
+  const itemOptionsForFilter = allItems.map(i => `<option value="${i.id}" ${i.id===stockItemFilter?'selected':''}>${i.name}</option>`).join('');
+
+  const rows = (balances||[]).map(r => {
+    const k = r.item_id+'|'+r.warehouse_id;
+    return `<tr>
+      <td>${r.items?.name ?? '—'}</td>
+      <td>${r.warehouses?.name ?? '—'}</td>
+      <td class="${r.quantity <= 0 ? 'low' : ''}">${r.quantity} ${r.items?.unit ?? ''}</td>
+      <td style="color:var(--ok)">+${inMap[k] || 0}</td>
+      <td style="color:var(--danger)">-${outMap[k] || 0}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="5">No stock yet. Add items, warehouses, then record a purchase.</td></tr>';
+
+  window.__stockExport = (balances||[]).map(r => {
+    const k = r.item_id+'|'+r.warehouse_id;
+    return [r.items?.name, r.warehouses?.name, r.quantity, inMap[k]||0, outMap[k]||0];
+  });
+
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Live Stock</h2>
+    <button class="gold" onclick="downloadCSV('stock.csv', ['Item','Warehouse','Current Qty','In (period)','Out (period)'], window.__stockExport)">⬇ Download CSV</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;margin-top:12px;flex-wrap:wrap;">
+      ${qbtn('today','Today')} ${qbtn('week','This Week')} ${qbtn('month','This Month')} ${qbtn('all','All Time')}
+    </div>
+    <div class="row" style="margin-bottom:10px;">
+      <div><label>From</label><input type="date" id="stock-start" value="${stockStart}"></div>
+      <div><label>To</label><input type="date" id="stock-end" value="${stockEnd}"></div>
+      <div><label>Warehouse</label>
+        <select id="stock-warehouse" onchange="setStockWarehouse(this.value)">
+          <option value="">All warehouses</option>${whOptions}
+        </select>
+      </div>
+      <div><label>Item</label>
+        <select id="stock-item" onchange="setStockItem(this.value)">
+          <option value="">All items</option>${itemOptionsForFilter}
+        </select>
+      </div>
+      <div><button class="primary" style="margin-top:0" onclick="applyStockRange()">Apply</button></div>
+    </div>
+    <div style="overflow-x:auto;">
+    <table><thead><tr><th>Item</th><th>Warehouse</th><th>Current Qty</th><th>In (period)</th><th>Out (period)</th></tr></thead>
+    <tbody id="stock-body">${rows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+
+/* ================= PARTIES ================= */
+let editingPartyId = null;
+async function viewParties(){
+  const parties = await fetchAll('parties');
+  const rows = parties.map(p => `<tr>
+      <td>${p.name}</td><td>${p.party_type}</td><td>${p.phone||''}</td>
+      <td><button class="gold" onclick="editParty('${p.id}')">Edit</button>
+      <button class="remove" onclick="deleteParty('${p.id}')">Delete</button></td>
+    </tr>`).join('');
+  window.__partiesExport = parties.map(p => [p.name, p.party_type, p.phone||'', p.address||'']);
+  window.__partiesData = parties;
+  return `<div class="card"><h2>${editingPartyId ? 'Edit Party' : 'Add Party'}</h2>
+    <label>Name</label><input id="p-name">
+    <label>Type</label>
+    <select id="p-type"><option value="customer">Customer</option><option value="supplier">Supplier</option></select>
+    <label>Phone</label><input id="p-phone">
+    <label>Address</label><input id="p-address">
+    <button class="primary" onclick="addParty()">${editingPartyId ? 'Update Party' : 'Save Party'}</button>
+    ${editingPartyId ? '<button class="gold" onclick="cancelEditParty()">Cancel</button>' : ''}
+    </div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">All Parties (${parties.length})</h2>
+    <button class="gold" onclick="downloadCSV('parties.csv', ['Name','Type','Phone','Address'], window.__partiesExport)">⬇ Download CSV</button>
+    </div>
+    <table style="margin-top:12px;"><thead><tr><th>Name</th><th>Type</th><th>Phone</th><th>Actions</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan=4>None yet</td></tr>'}</tbody></table></div>`;
+}
+function editParty(id){
+  const p = (window.__partiesData||[]).find(x=>x.id===id);
+  if (!p) return;
+  editingPartyId = id;
+  renderTab('parties');
+  setTimeout(()=>{
+    document.getElementById('p-name').value = p.name || '';
+    document.getElementById('p-type').value = p.party_type || 'customer';
+    document.getElementById('p-phone').value = p.phone || '';
+    document.getElementById('p-address').value = p.address || '';
+  }, 0);
+}
+function cancelEditParty(){ editingPartyId = null; renderTab('parties'); }
+async function deleteParty(id){
+  if (!confirm('Delete this party? This cannot be undone.')) return;
+  const { error } = await sb.from('parties').delete().eq('id', id);
+  if (error) return toast(error.message);
+  toast('Party deleted'); renderTab('parties');
+}
+async function addParty(){
+  const name = document.getElementById('p-name').value.trim();
+  if (!name) return toast('Name required');
+  const payload = {
+    name, party_type: document.getElementById('p-type').value,
+    phone: document.getElementById('p-phone').value,
+    address: document.getElementById('p-address').value
+  };
+  const { error } = editingPartyId
+    ? await sb.from('parties').update(payload).eq('id', editingPartyId)
+    : await sb.from('parties').insert(payload);
+  if (error) return toast(error.message);
+  toast(editingPartyId ? 'Party updated' : 'Party added');
+  editingPartyId = null;
+  renderTab('parties');
+}
+
+/* ================= ITEMS ================= */
+let editingItemId = null;
+async function viewItems(){
+  const items = await fetchAll('items');
+  const rows = items.map(i => `<tr>
+      <td>${i.name}</td><td>${i.unit}</td><td>₹${i.sale_price}</td><td>₹${i.purchase_price}</td>
+      <td><button class="gold" onclick="editItem('${i.id}')">Edit</button>
+      <button class="remove" onclick="deleteItem('${i.id}')">Delete</button></td>
+    </tr>`).join('');
+  window.__itemsExport = items.map(i => [i.name, i.unit, i.sale_price, i.purchase_price]);
+  window.__itemsData = items;
+  return `<div class="card"><h2>${editingItemId ? 'Edit Item' : 'Add Item'}</h2>
+    <label>Item Name</label><input id="i-name">
+    <div class="row">
+      <div><label>Unit</label><input id="i-unit" placeholder="pcs / kg / box" value="pcs"></div>
+      <div><label>Sale Price</label><input id="i-sale" type="number" step="0.01"></div>
+      <div><label>Purchase Price</label><input id="i-purchase" type="number" step="0.01"></div>
+    </div>
+    <button class="primary" onclick="addItem()">${editingItemId ? 'Update Item' : 'Save Item'}</button>
+    ${editingItemId ? '<button class="gold" onclick="cancelEditItem()">Cancel</button>' : ''}
+    </div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">All Items (${items.length})</h2>
+    <button class="gold" onclick="downloadCSV('items.csv', ['Name','Unit','Sale Price','Purchase Price'], window.__itemsExport)">⬇ Download CSV</button>
+    </div>
+    <table style="margin-top:12px;"><thead><tr><th>Name</th><th>Unit</th><th>Sale ₹</th><th>Purchase ₹</th><th>Actions</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan=5>None yet</td></tr>'}</tbody></table></div>`;
+}
+function editItem(id){
+  const i = (window.__itemsData||[]).find(x=>x.id===id);
+  if (!i) return;
+  editingItemId = id;
+  renderTab('items');
+  setTimeout(()=>{
+    document.getElementById('i-name').value = i.name || '';
+    document.getElementById('i-unit').value = i.unit || 'pcs';
+    document.getElementById('i-sale').value = i.sale_price || 0;
+    document.getElementById('i-purchase').value = i.purchase_price || 0;
+  }, 0);
+}
+function cancelEditItem(){ editingItemId = null; renderTab('items'); }
+async function deleteItem(id){
+  if (!confirm('Delete this item? This cannot be undone.')) return;
+  const { error } = await sb.from('items').delete().eq('id', id);
+  if (error) return toast(error.message);
+  toast('Item deleted'); renderTab('items');
+}
+async function addItem(){
+  const name = document.getElementById('i-name').value.trim();
+  if (!name) return toast('Name required');
+  const payload = {
+    name, unit: document.getElementById('i-unit').value || 'pcs',
+    sale_price: +document.getElementById('i-sale').value || 0,
+    purchase_price: +document.getElementById('i-purchase').value || 0
+  };
+  const { error } = editingItemId
+    ? await sb.from('items').update(payload).eq('id', editingItemId)
+    : await sb.from('items').insert(payload);
+  if (error) return toast(error.message);
+  toast(editingItemId ? 'Item updated' : 'Item added');
+  editingItemId = null;
+  renderTab('items');
+}
+
+/* ================= WAREHOUSES ================= */
+let editingWarehouseId = null;
+async function viewWarehouses(){
+  const whs = await fetchAll('warehouses');
+  const rows = whs.map(w => `<tr>
+      <td>${w.name}</td><td>${w.location||''}</td>
+      <td><button class="gold" onclick="editWarehouse('${w.id}')">Edit</button>
+      <button class="remove" onclick="deleteWarehouse('${w.id}')">Delete</button></td>
+    </tr>`).join('');
+  window.__warehousesExport = whs.map(w => [w.name, w.location||'']);
+  window.__warehousesData = whs;
+  return `<div class="card"><h2>${editingWarehouseId ? 'Edit Warehouse' : 'Add Warehouse / Shop'}</h2>
+    <label>Name</label><input id="w-name" placeholder="e.g. Main Shop, Loni Warehouse">
+    <label>Location</label><input id="w-location">
+    <button class="primary" onclick="addWarehouse()">${editingWarehouseId ? 'Update Warehouse' : 'Save Warehouse'}</button>
+    ${editingWarehouseId ? '<button class="gold" onclick="cancelEditWarehouse()">Cancel</button>' : ''}
+    </div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">All Warehouses (${whs.length})</h2>
+    <button class="gold" onclick="downloadCSV('warehouses.csv', ['Name','Location'], window.__warehousesExport)">⬇ Download CSV</button>
+    </div>
+    <table style="margin-top:12px;"><thead><tr><th>Name</th><th>Location</th><th>Actions</th></tr></thead>
+    <tbody>${rows || '<tr><td colspan=3>None yet</td></tr>'}</tbody></table></div>`;
+}
+function editWarehouse(id){
+  const w = (window.__warehousesData||[]).find(x=>x.id===id);
+  if (!w) return;
+  editingWarehouseId = id;
+  renderTab('warehouses');
+  setTimeout(()=>{
+    document.getElementById('w-name').value = w.name || '';
+    document.getElementById('w-location').value = w.location || '';
+  }, 0);
+}
+function cancelEditWarehouse(){ editingWarehouseId = null; renderTab('warehouses'); }
+async function deleteWarehouse(id){
+  if (!confirm('Delete this warehouse? This cannot be undone (stock records tied to it will be removed too).')) return;
+  const { error } = await sb.from('warehouses').delete().eq('id', id);
+  if (error) return toast(error.message);
+  toast('Warehouse deleted'); renderTab('warehouses');
+}
+async function addWarehouse(){
+  const name = document.getElementById('w-name').value.trim();
+  if (!name) return toast('Name required');
+  const payload = { name, location: document.getElementById('w-location').value };
+  const { error } = editingWarehouseId
+    ? await sb.from('warehouses').update(payload).eq('id', editingWarehouseId)
+    : await sb.from('warehouses').insert(payload);
+  if (error) return toast(error.message);
+  toast(editingWarehouseId ? 'Warehouse updated' : 'Warehouse added');
+  editingWarehouseId = null;
+  renderTab('warehouses');
+}
+
+/* ================= SALE / PURCHASE (shared line-item builder) ================= */
+let lineItems = [];
+let editingDocId = null;   // id of sale/purchase currently being edited (null = new)
+let editingDocKind = null; // 'sale' or 'purchase'
+let editingDocPrefill = null; // { party_id, warehouse_id, bill_no }
+
+async function viewSaleForm(){ return await docForm('sale'); }
+async function viewPurchaseForm(){ return await docForm('purchase'); }
+
+async function docForm(kind){
+  const isEditingThis = editingDocId && editingDocKind === kind;
+  if (!isEditingThis) lineItems = [{item_id:'', quantity:1, rate:0}];
+  const parties = await fetchAll('parties');
+  const items = await fetchAll('items');
+  const whs = await fetchAll('warehouses');
+  window.__items = items; // cache for rate autofill
+  const isSale = kind === 'sale';
+  const pf = isEditingThis ? editingDocPrefill : null;
+  const partyOptions = parties
+    .filter(p => isSale ? p.party_type==='customer' : true)
+    .map(p => `<option value="${p.id}" ${pf && pf.party_id===p.id ? 'selected':''}>${p.name}</option>`).join('');
+  const whOptions = whs.map(w => `<option value="${w.id}" ${pf && pf.warehouse_id===w.id ? 'selected':''}>${w.name}</option>`).join('');
+  return `<div class="card">
+    <h2>${isEditingThis ? '✏️ Edit ' + (isSale?'Sale':'Purchase') : (isSale ? '🧾 New Sale' : '⬇️ New Purchase')}</h2>
+    <label>${isSale ? 'Customer' : 'Supplier'}</label>
+    <select id="doc-party"><option value="">— none —</option>${partyOptions}</select>
+    <label>Warehouse / Shop</label>
+    <select id="doc-warehouse">${whOptions || '<option value="">Add a warehouse first</option>'}</select>
+    <label>Bill No.</label><input id="doc-billno" placeholder="optional" value="${pf?.bill_no ?? ''}">
+    <div id="lineitems" style="margin-top:14px;"></div>
+    <button class="gold" onclick="addLine('${kind}')">+ Add Item Line</button>
+    <div class="total" id="doc-total">Total: ₹0.00</div>
+    <button class="primary" onclick="saveDoc('${kind}')">${isEditingThis ? 'Update ' + (isSale?'Sale':'Purchase') : 'Save ' + (isSale?'Sale':'Purchase')}</button>
+    ${isEditingThis ? `<button class="gold" onclick="cancelEditDoc('${kind}')">Cancel</button>` : ''}
+  </div>`;
+}
+function itemOptions(selected){
+  return (window.__items||[]).map(i => `<option value="${i.id}" ${i.id===selected?'selected':''}>${i.name}</option>`).join('');
+}
+function renderLines(kind){
+  const el = document.getElementById('lineitems');
+  el.innerHTML = lineItems.map((li,idx) => `
+    <div class="lineitem">
+      <div><label>Item</label>
+        <select onchange="onItemSelect(${idx},this.value,'${kind}')">
+          <option value="">Select item</option>${itemOptions(li.item_id)}
+        </select>
+      </div>
+      <div><label>Qty</label><input type="number" id="qty-${idx}" value="${li.quantity}" min="0.01" step="0.01"
+        oninput="updateQtyRate(${idx},'quantity',this.value)"></div>
+      <div><label>Rate ₹</label><input type="number" id="rate-${idx}" value="${li.rate}" min="0" step="0.01"
+        oninput="updateQtyRate(${idx},'rate',this.value)"></div>
+      <button class="remove" onclick="removeLine(${idx},'${kind}')">✕</button>
+    </div>`).join('');
+  updateTotalDisplay();
+}
+function addLine(kind){ lineItems.push({item_id:'', quantity:1, rate:0}); renderLines(kind); }
+function removeLine(idx,kind){ lineItems.splice(idx,1); renderLines(kind); }
+
+// Qty/Rate typing: update the array + total only — never rebuild the DOM,
+// so the input keeps focus and you can type multiple digits.
+function updateQtyRate(idx, field, value){
+  lineItems[idx][field] = parseFloat(value) || 0;
+  updateTotalDisplay();
+}
+function updateTotalDisplay(){
+  const total = lineItems.reduce((s,li)=> s + (li.quantity*li.rate||0), 0);
+  document.getElementById('doc-total').textContent = `Total: ₹${total.toFixed(2)}`;
+}
+
+// Item dropdown change: this one does need a small DOM update (autofill the
+// rate), but we update just that one field instead of rebuilding everything.
+function onItemSelect(idx, value, kind){
+  lineItems[idx].item_id = value;
+  const it = (window.__items||[]).find(i=>i.id===value);
+  if (it) {
+    lineItems[idx].rate = kind==='sale' ? it.sale_price : it.purchase_price;
+    const rateInput = document.getElementById('rate-'+idx);
+    if (rateInput) rateInput.value = lineItems[idx].rate;
+  }
+  updateTotalDisplay();
+}
+async function saveDoc(kind){
+  const warehouse_id = document.getElementById('doc-warehouse').value;
+  if (!warehouse_id) return toast('Select a warehouse');
+  const valid = lineItems.filter(li => li.item_id && li.quantity > 0);
+  if (!valid.length) return toast('Add at least one item line');
+  const table = kind === 'sale' ? 'sales' : 'purchases';
+  const itemTable = kind === 'sale' ? 'sale_items' : 'purchase_items';
+  const fk = kind === 'sale' ? 'sale_id' : 'purchase_id';
+  const total = valid.reduce((s,li)=> s + li.quantity*li.rate, 0);
+  const isEditingThis = editingDocId && editingDocKind === kind;
+
+  const payload = {
+    party_id: document.getElementById('doc-party').value || null,
+    warehouse_id,
+    bill_no: document.getElementById('doc-billno').value || null,
+    total,
+    created_by: currentUser.email
+  };
+
+  let docId;
+  if (isEditingThis) {
+    // Remove old line items first — this fires the DB triggers that restore/remove
+    // stock for the old quantities, then the new insert applies the new quantities.
+    const { error: delErr } = await sb.from(itemTable).delete().eq(fk, editingDocId);
+    if (delErr) return toast(delErr.message);
+    const { error: updErr } = await sb.from(table).update(payload).eq('id', editingDocId);
+    if (updErr) return toast(updErr.message);
+    docId = editingDocId;
+  } else {
+    const { data: doc, error } = await sb.from(table).insert(payload).select().single();
+    if (error) return toast(error.message);
+    docId = doc.id;
+  }
+
+  const rows = valid.map(li => ({ [fk]: docId, item_id: li.item_id, quantity: li.quantity, rate: li.rate, warehouse_id }));
+  const { error: err2 } = await sb.from(itemTable).insert(rows);
+  if (err2) return toast(err2.message);
+
+  toast(isEditingThis
+    ? `${kind==='sale'?'Sale':'Purchase'} updated — stock adjusted automatically`
+    : `${kind==='sale'?'Sale':'Purchase'} saved — stock updated automatically`);
+  editingDocId = null; editingDocKind = null; editingDocPrefill = null;
+  renderTab('stock');
+}
+
+async function editSale(id){
+  const { data: sale, error } = await sb.from('sales').select('id,party_id,warehouse_id,bill_no').eq('id', id).single();
+  if (error) return toast(error.message);
+  const { data: items, error: err2 } = await sb.from('sale_items').select('item_id,quantity,rate').eq('sale_id', id);
+  if (err2) return toast(err2.message);
+  editingDocId = id;
+  editingDocKind = 'sale';
+  editingDocPrefill = { party_id: sale.party_id, warehouse_id: sale.warehouse_id, bill_no: sale.bill_no };
+  lineItems = (items && items.length) ? items.map(i => ({ item_id: i.item_id, quantity: i.quantity, rate: i.rate })) : [{item_id:'', quantity:1, rate:0}];
+  renderTab('sale');
+}
+async function editPurchase(id){
+  const { data: purchase, error } = await sb.from('purchases').select('id,party_id,warehouse_id,bill_no').eq('id', id).single();
+  if (error) return toast(error.message);
+  const { data: items, error: err2 } = await sb.from('purchase_items').select('item_id,quantity,rate').eq('purchase_id', id);
+  if (err2) return toast(err2.message);
+  editingDocId = id;
+  editingDocKind = 'purchase';
+  editingDocPrefill = { party_id: purchase.party_id, warehouse_id: purchase.warehouse_id, bill_no: purchase.bill_no };
+  lineItems = (items && items.length) ? items.map(i => ({ item_id: i.item_id, quantity: i.quantity, rate: i.rate })) : [{item_id:'', quantity:1, rate:0}];
+  renderTab('purchase');
+}
+function cancelEditDoc(kind){
+  editingDocId = null; editingDocKind = null; editingDocPrefill = null;
+  renderTab(kind);
+}
+
+/* ================= SALES REPORT (date-filtered, full detail) ================= */
+let reportRange = 'today';
+let reportStart = ymd(new Date());
+let reportEnd = ymd(new Date());
+let reportWarehouse = '';
+let reportParty = '';
+
+function ymd(d){ return d.toISOString().slice(0,10); }
+function quickRange(r){
+  const today = new Date();
+  if (r === 'today') { reportStart = ymd(today); reportEnd = ymd(today); }
+  else if (r === 'week') { const s = new Date(today); s.setDate(s.getDate()-6); reportStart = ymd(s); reportEnd = ymd(today); }
+  else if (r === 'month') { const s = new Date(today); s.setDate(s.getDate()-29); reportStart = ymd(s); reportEnd = ymd(today); }
+  else if (r === 'year') { const s = new Date(today); s.setFullYear(s.getFullYear()-1); reportStart = ymd(s); reportEnd = ymd(today); }
+  reportRange = r;
+  renderTab('reports');
+}
+function applyCustomRange(){
+  reportStart = document.getElementById('rep-start').value || reportStart;
+  reportEnd = document.getElementById('rep-end').value || reportEnd;
+  reportRange = 'custom';
+  renderTab('reports');
+}
+function setReportWarehouse(v){ reportWarehouse = v; renderTab('reports'); }
+function setReportParty(v){ reportParty = v; renderTab('reports'); }
+
+async function viewReports(){
+  const warehouses = await fetchAll('warehouses');
+  const parties = await fetchAll('parties');
+  const customers = parties.filter(p => p.party_type === 'customer');
+
+  let query = sb.from('sale_items')
+    .select('quantity, rate, amount, items(name), sales!inner(bill_date, bill_no, created_by, warehouse_id, party_id, parties(name), warehouses(name))')
+    .gte('sales.bill_date', reportStart)
+    .lte('sales.bill_date', reportEnd);
+  if (reportWarehouse) query = query.eq('sales.warehouse_id', reportWarehouse);
+  if (reportParty) query = query.eq('sales.party_id', reportParty);
+
+  const { data, error } = await query;
+  if (error) return `<div class="card"><p style="color:var(--danger)">${error.message}</p></div>`;
+
+  const rows = (data || []).sort((a,b)=> (b.sales?.bill_date||'').localeCompare(a.sales?.bill_date||''));
+  const grandTotal = rows.reduce((s,r)=> s + (r.amount||0), 0);
+
+  const qbtn = (r,label) => `<button class="gold" style="opacity:${reportRange===r?1:.55}" onclick="quickRange('${r}')">${label}</button>`;
+  const whOptions = warehouses.map(w => `<option value="${w.id}" ${w.id===reportWarehouse?'selected':''}>${w.name}</option>`).join('');
+  const partyOptions = customers.map(p => `<option value="${p.id}" ${p.id===reportParty?'selected':''}>${p.name}</option>`).join('');
+
+  const tableRows = rows.map(r => `
+    <tr>
+      <td>${r.sales?.bill_date ?? ''}</td>
+      <td>${r.sales?.parties?.name ?? '—'}</td>
+      <td>${r.items?.name ?? '—'}</td>
+      <td>${r.quantity}</td>
+      <td>₹${r.rate}</td>
+      <td>₹${r.amount}</td>
+      <td>${r.sales?.warehouses?.name ?? '—'}</td>
+      <td>${r.sales?.created_by ?? ''}</td>
+    </tr>`).join('') || '<tr><td colspan="8">No sales match these filters</td></tr>';
+
+  window.__reportExport = rows.map(r => [
+    r.sales?.bill_date, r.sales?.parties?.name, r.items?.name, r.quantity, r.rate, r.amount, r.sales?.warehouses?.name, r.sales?.created_by
+  ]);
+
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Sales Report</h2>
+    <button class="gold" onclick="downloadCSV('sales-report.csv', ['Date','Customer','Item','Qty','Rate','Amount','Warehouse','Staff'], window.__reportExport)">⬇ Download CSV</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;margin-top:12px;flex-wrap:wrap;">
+      ${qbtn('today','Today')} ${qbtn('week','This Week')} ${qbtn('month','This Month')} ${qbtn('year','This Year')}
+    </div>
+    <div class="row" style="margin-bottom:6px;">
+      <div><label>From</label><input type="date" id="rep-start" value="${reportStart}"></div>
+      <div><label>To</label><input type="date" id="rep-end" value="${reportEnd}"></div>
+      <div><label>Warehouse</label>
+        <select id="rep-warehouse" onchange="setReportWarehouse(this.value)">
+          <option value="">All warehouses</option>${whOptions}
+        </select>
+      </div>
+      <div><label>Party</label>
+        <select id="rep-party" onchange="setReportParty(this.value)">
+          <option value="">All customers</option>${partyOptions}
+        </select>
+      </div>
+      <div><button class="primary" style="margin-top:0" onclick="applyCustomRange()">Apply</button></div>
+    </div>
+    <div style="overflow-x:auto;margin-top:14px;">
+    <table><thead><tr>
+      <th>Date</th><th>Customer</th><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Warehouse</th><th>Staff</th>
+    </tr></thead>
+    <tbody>${tableRows}</tbody></table>
+    </div>
+    <div class="total">Grand Total: ₹${grandTotal.toFixed(2)} (${rows.length} line items)</div>
+  </div>`;
+}
+
+
+async function viewHistory(){
+  const { data: sales } = await sb.from('sales').select('id,bill_no,bill_date,total,created_by,parties(name)').order('created_at',{ascending:false}).limit(20);
+  const { data: purchases } = await sb.from('purchases').select('id,bill_no,bill_date,total,created_by,parties(name)').order('created_at',{ascending:false}).limit(20);
+  const saleRows = (sales||[]).map(s=>`<tr><td>${s.bill_date}</td><td>${s.parties?.name||'—'}</td><td>₹${s.total}</td><td>${s.created_by||''}</td>
+      <td><button class="gold" onclick="editSale('${s.id}')">Edit</button>
+      <button class="remove" onclick="deleteSale('${s.id}')">Delete</button></td></tr>`).join('');
+  const purRows = (purchases||[]).map(p=>`<tr><td>${p.bill_date}</td><td>${p.parties?.name||'—'}</td><td>₹${p.total}</td><td>${p.created_by||''}</td>
+      <td><button class="gold" onclick="editPurchase('${p.id}')">Edit</button>
+      <button class="remove" onclick="deletePurchase('${p.id}')">Delete</button></td></tr>`).join('');
+  window.__historySalesExport = (sales||[]).map(s => [s.bill_date, s.bill_no||'', s.parties?.name||'', s.total, s.created_by||'']);
+  window.__historyPurchasesExport = (purchases||[]).map(p => [p.bill_date, p.bill_no||'', p.parties?.name||'', p.total, p.created_by||'']);
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Recent Sales</h2>
+    <button class="gold" onclick="downloadCSV('sales-history.csv', ['Date','Bill No','Customer','Total','Staff'], window.__historySalesExport)">⬇ Download CSV</button>
+    </div>
+    <table style="margin-top:12px;"><thead><tr><th>Date</th><th>Customer</th><th>Total</th><th>By</th><th>Actions</th></tr></thead>
+    <tbody>${saleRows||'<tr><td colspan=5>None yet</td></tr>'}</tbody></table></div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;">
+    <h2 style="margin:0;">Recent Purchases</h2>
+    <button class="gold" onclick="downloadCSV('purchase-history.csv', ['Date','Bill No','Supplier','Total','Staff'], window.__historyPurchasesExport)">⬇ Download CSV</button>
+    </div>
+    <table style="margin-top:12px;"><thead><tr><th>Date</th><th>Supplier</th><th>Total</th><th>By</th><th>Actions</th></tr></thead>
+    <tbody>${purRows||'<tr><td colspan=5>None yet</td></tr>'}</tbody></table></div>`;
+}
+async function deleteSale(id){
+  if (!confirm('Delete this sale? The stock it took out will be added back automatically.')) return;
+  const { error } = await sb.from('sales').delete().eq('id', id);
+  if (error) return toast(error.message);
+  toast('Sale deleted — stock restored'); renderTab('history');
+}
+async function deletePurchase(id){
+  if (!confirm('Delete this purchase? The stock it added will be removed automatically.')) return;
+  const { error } = await sb.from('purchases').delete().eq('id', id);
+  if (error) return toast(error.message);
+  toast('Purchase deleted — stock adjusted'); renderTab('history');
+}
+
+/* ================= REALTIME (live sync across all staff) ================= */
+function subscribeRealtime(){
+  sb.channel('stock-changes')
+    .on('postgres_changes', {event:'*', schema:'public', table:'item_stock'}, () => {
+      if (activeTab === 'stock') renderTab('stock');
+      else toast('Stock updated by another user');
+    })
+    .subscribe();
+}
+
+checkSession();
+</script>
+</body>
+</html>
